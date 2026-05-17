@@ -174,7 +174,7 @@ class SteathMissionGame {
         // Update enemies
         this.enemies.forEach((enemy) => {
             if (enemy.isAlive()) {
-                enemy.update(this.player, this.obstacles);
+                enemy.update(this.player, this.obstacles, this.enemies, this.frameCount);
 
                 // Enemy detection of player
                 const dx = this.player.x - enemy.x;
@@ -221,6 +221,31 @@ class SteathMissionGame {
         requestAnimationFrame(this.gameLoop);
     }
 
+    isBackShot(enemy) {
+        // Calculate enemy facing direction
+        const dx = this.player.x - enemy.x;
+        const dy = this.player.y - enemy.y;
+        const angleToPlayer = Math.atan2(dy, dx);
+
+        // Enemy facing is based on where it's moving (patrol or chase direction)
+        // For simplicity, assume enemy faces direction of movement
+        let enemyFacing = Math.atan2(enemy.speed, 0); // Default
+        if (enemy.movingToLastSeen && enemy.lastSeenPlayerPos) {
+            const edx = enemy.lastSeenPlayerPos.x - enemy.x;
+            const edy = enemy.lastSeenPlayerPos.y - enemy.y;
+            enemyFacing = Math.atan2(edy, edx);
+        } else if (enemy.alertLevel > 50) {
+            enemyFacing = angleToPlayer;
+        }
+
+        // Check if angle difference is > 90 degrees (back shot)
+        let angleDiff = Math.abs(enemyFacing - angleToPlayer);
+        // Normalize angle difference
+        while (angleDiff > Math.PI) angleDiff = Math.abs(angleDiff - Math.PI * 2);
+        
+        return angleDiff > Math.PI / 2; // 90 degrees
+    }
+
     playerShoot(event) {
         if (this.player.weapon !== 'suppressed' || !this.weapon.fire()) return;
 
@@ -256,8 +281,16 @@ class SteathMissionGame {
                     // Check if bullet hits
                     const dotProduct = (dx * edx + dy * edy) / (distance * eDist);
                     if (dotProduct > 0.95) {
-                        enemy.takeDamage(this.weapon.damage);
-                        this.gameState.score += 10;
+                        // Check if it's a back shot
+                        const isBackShot = this.isBackShot(enemy);
+                        enemy.takeDamage(this.weapon.damage, isBackShot);
+                        
+                        if (isBackShot) {
+                            this.gameState.score += 25; // Bonus for back shot
+                            this.gameState.backShotBonus = 30; // Display bonus for 30 frames
+                        } else {
+                            this.gameState.score += 10;
+                        }
                     }
                 }
             });
@@ -277,8 +310,15 @@ class SteathMissionGame {
             const distance = Math.hypot(dx, dy);
 
             if (distance < this.player.meleeRange) {
-                enemy.takeDamage(this.player.meleeDamage);
-                this.gameState.score += 25;
+                const isBackStab = this.isBackShot(enemy);
+                enemy.takeDamage(this.player.meleeDamage, isBackStab);
+                
+                if (isBackStab) {
+                    this.gameState.score += 50; // Bonus for back stab
+                    this.gameState.backShotBonus = 30;
+                } else {
+                    this.gameState.score += 25;
+                }
             }
         });
 
@@ -368,6 +408,20 @@ class SteathMissionGame {
 
         // Draw obstacles
         this.obstacles.forEach((obstacle) => obstacle.draw(this.ctx));
+
+        // Draw last seen locations
+        this.enemies.forEach((enemy) => {
+            if (enemy.lastSeenPlayerPos && enemy.alertLevel > 20) {
+                this.ctx.fillStyle = 'rgba(255, 100, 100, 0.3)';
+                this.ctx.beginPath();
+                this.ctx.arc(enemy.lastSeenPlayerPos.x, enemy.lastSeenPlayerPos.y, 30, 0, Math.PI * 2);
+                this.ctx.fill();
+                
+                this.ctx.strokeStyle = 'rgba(255, 100, 100, 0.6)';
+                this.ctx.lineWidth = 2;
+                this.ctx.stroke();
+            }
+        });
 
         // Draw enemies
         this.enemies.forEach((enemy) => enemy.draw(this.ctx));
@@ -470,6 +524,15 @@ class SteathMissionGame {
 
         // Update seed
         document.getElementById('seedStat').textContent = `🌱 Seed: ${this.gameState.seed}`;
+
+        // Update back shot bonus display
+        if (this.gameState.backShotBonus > 0) {
+            document.getElementById('bonusStat').textContent = `💥 BACK SHOT! +25 BONUS!`;
+            document.getElementById('bonusStat').style.display = 'block';
+            this.gameState.backShotBonus--;
+        } else {
+            document.getElementById('bonusStat').style.display = 'none';
+        }
     }
 
     start() {

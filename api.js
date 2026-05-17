@@ -37,6 +37,7 @@ class Player {
         this.baseDetectionReduction = 0.5; // Stealth reduction per frame when still
         this.lastMouseX = 0;
         this.lastMouseY = 0;
+        this.lastFacingAngle = 0; // For back-shoot detection
     }
 
     update(keys, canvasWidth, canvasHeight, obstacles) {
@@ -48,6 +49,11 @@ class Player {
         if (keys['ArrowDown'] || keys['s'] || keys['S']) this.y += this.speed;
         if (keys['ArrowLeft'] || keys['a'] || keys['A']) this.x -= this.speed;
         if (keys['ArrowRight'] || keys['d'] || keys['D']) this.x += this.speed;
+
+        // Update facing angle based on mouse position
+        const dx = this.lastMouseX - this.x;
+        const dy = this.lastMouseY - this.y;
+        this.lastFacingAngle = Math.atan2(dy, dx);
 
         // Boundary check
         this.x = Math.max(10, Math.min(canvasWidth - 10, this.x));
@@ -131,15 +137,21 @@ class Enemy {
         this.health = 50;
         this.maxHealth = 50;
         this.detectionRange = 150;
-        this.alertLevel = 0;
+        this.suspicionRange = 200; // Extended range for suspicion
+        this.alertLevel = 0; // 0 = relaxed, 1-50 = suspicious, 51-100 = alert
+        this.suspiciousTime = 0; // Time spent suspicious
         this.patrolPoints = patrolPoints.length > 0 ? patrolPoints : [{ x, y }];
         this.currentPatrolIndex = 0;
         this.speed = 1.5;
         this.shootCooldown = 0;
         this.visionAngle = Math.PI * 0.8; // 144 degrees
+        this.lastSeenPlayerPos = null; // Last known player position
+        this.lastSeenPlayerTime = 0; // When player was last seen
+        this.reinforcementWaitTime = 0; // Time until this enemy goes to last seen location
+        this.movingToLastSeen = false; // Currently moving to last seen location
     }
 
-    update(player, obstacles) {
+    update(player, obstacles, allEnemies, frameCount) {
         if (!this.isAlive()) return;
 
         const oldX = this.x;
@@ -152,12 +164,49 @@ class Enemy {
 
         // Check if player is in detection range
         const playerDetected = this.canSeePlayer(player);
+        const playerSuspicious = this.canSuspectPlayer(player);
 
+        // Update alert level based on detection
         if (playerDetected && distance < this.detectionRange) {
+            // Full alert - enemy sees player clearly
             this.alertLevel = Math.min(100, this.alertLevel + 5);
+            this.lastSeenPlayerPos = { x: player.x, y: player.y };
+            this.lastSeenPlayerTime = frameCount;
+            this.suspiciousTime = 0;
             this.chasePlayer(player);
+        } else if (playerSuspicious && distance < this.suspicionRange) {
+            // Suspicious - might be player
+            if (this.alertLevel < 50) {
+                this.alertLevel = Math.min(50, this.alertLevel + 2);
+                this.suspiciousTime++;
+            }
+            // Mark last seen location when becoming suspicious
+            if (this.alertLevel >= 40 && !this.lastSeenPlayerPos) {
+                this.lastSeenPlayerPos = { x: player.x, y: player.y };
+                this.lastSeenPlayerTime = frameCount;
+            }
         } else {
-            this.alertLevel = Math.max(0, this.alertLevel - 1);
+            // Relaxed state
+            this.alertLevel = Math.max(0, this.alertLevel - 0.5);
+            this.suspiciousTime = 0;
+        }
+
+        // Check if should go to last seen location (Sniper Elite mechanic)
+        if (this.lastSeenPlayerPos && frameCount - this.lastSeenPlayerTime > 1800) { // 30 seconds at 60fps
+            this.reinforcementWaitTime = 0;
+            this.movingToLastSeen = true;
+        }
+
+        // AI behavior based on alert level
+        if (this.alertLevel > 50) {
+            this.chasePlayer(player);
+        } else if (this.movingToLastSeen && this.lastSeenPlayerPos) {
+            this.moveToLocation(this.lastSeenPlayerPos);
+        } else if (this.alertLevel > 20) {
+            // Suspicious - search around
+            this.patrol();
+        } else {
+            // Normal patrol
             this.patrol();
         }
 
@@ -179,9 +228,16 @@ class Enemy {
         const distance = Math.hypot(dx, dy);
 
         if (distance > this.detectionRange) return false;
+        return true;
+    }
 
-        // Check line of sight (simple: no obstacles for now)
-        // In a real game, you'd check for obstacles blocking vision
+    canSuspectPlayer(player) {
+        const dx = player.x - this.x;
+        const dy = player.y - this.y;
+        const distance = Math.hypot(dx, dy);
+
+        if (distance > this.suspicionRange) return false;
+        // More likely to suspect if player is moving
         return true;
     }
 
@@ -193,6 +249,23 @@ class Enemy {
         if (distance > 0) {
             this.x += (dx / distance) * this.speed * 1.5;
             this.y += (dy / distance) * this.speed * 1.5;
+        }
+    }
+
+    moveToLocation(location) {
+        const dx = location.x - this.x;
+        const dy = location.y - this.y;
+        const distance = Math.hypot(dx, dy);
+
+        if (distance < 15) {
+            // Reached location, look around
+            this.movingToLastSeen = false;
+            return;
+        }
+
+        if (distance > 0) {
+            this.x += (dx / distance) * this.speed;
+            this.y += (dy / distance) * this.speed;
         }
     }
 
@@ -212,8 +285,9 @@ class Enemy {
         }
     }
 
-    takeDamage(damage) {
-        this.health -= damage;
+    takeDamage(damage, isBackShot = false) {
+        const finalDamage = isBackShot ? damage * 2 : damage; // Double damage for back shots
+        this.health -= finalDamage;
         this.alertLevel = 100; // Alert on damage
     }
 
@@ -223,14 +297,14 @@ class Enemy {
 
     draw(ctx) {
         // Draw enemy based on alert level
-        if (this.alertLevel < 33) {
-            ctx.fillStyle = '#ffaa00'; // Orange - relaxed
-        } else if (this.alertLevel < 66) {
-            ctx.fillStyle = '#ff6600'; // Dark orange - alert
-        } else {
-            ctx.fillStyle = '#ff0000'; // Red - combat
+        let color = '#ffaa00'; // Orange - relaxed
+        if (this.alertLevel >= 50) {
+            color = '#ff0000'; // Red - alert
+        } else if (this.alertLevel >= 20) {
+            color = '#ff6600'; // Dark orange - suspicious
         }
 
+        ctx.fillStyle = color;
         ctx.fillRect(this.x - this.width / 2, this.y - this.height / 2, this.width, this.height);
 
         // Draw health bar
@@ -241,6 +315,22 @@ class Enemy {
         ctx.fillStyle = '#00ff00';
         ctx.fillRect(this.x - barWidth / 2, this.y - 15, (this.health / this.maxHealth) * barWidth, barHeight);
 
+        // Draw suspicion indicator (!) when suspicious
+        if (this.alertLevel >= 20 && this.alertLevel < 50) {
+            ctx.fillStyle = '#ffff00';
+            ctx.font = 'bold 14px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('?', this.x, this.y - 25);
+        }
+
+        // Draw alert indicator (!) when fully alert
+        if (this.alertLevel >= 50) {
+            ctx.fillStyle = '#ff0000';
+            ctx.font = 'bold 14px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('!', this.x, this.y - 25);
+        }
+
         // Draw detection range when alerted
         if (this.alertLevel > 50) {
             ctx.strokeStyle = `rgba(255, 0, 0, ${this.alertLevel / 100 * 0.3})`;
@@ -248,6 +338,18 @@ class Enemy {
             ctx.beginPath();
             ctx.arc(this.x, this.y, this.detectionRange, 0, Math.PI * 2);
             ctx.stroke();
+        }
+
+        // Draw moving to last seen indicator
+        if (this.movingToLastSeen && this.lastSeenPlayerPos) {
+            ctx.strokeStyle = 'rgba(255, 100, 100, 0.5)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([3, 3]);
+            ctx.beginPath();
+            ctx.moveTo(this.x, this.y);
+            ctx.lineTo(this.lastSeenPlayerPos.x, this.lastSeenPlayerPos.y);
+            ctx.stroke();
+            ctx.setLineDash([]);
         }
     }
 }
@@ -355,6 +457,7 @@ class GameState {
         this.level = 1;
         this.totalEnemiesEliminated = 0;
         this.seed = Math.floor(Math.random() * 1000000);
+        this.backShotBonus = 0; // Track recent back shot bonus
     }
 
     reset() {
@@ -363,6 +466,7 @@ class GameState {
         this.missionComplete = false;
         this.score = 0;
         this.seed = Math.floor(Math.random() * 1000000); // New seed for next game
+        this.backShotBonus = 0;
     }
 
     addScore(points) {

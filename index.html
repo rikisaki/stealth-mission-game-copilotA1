@@ -61,6 +61,8 @@
             display: flex;
             flex-direction: column;
             gap: 15px;
+            max-height: 600px;
+            overflow-y: auto;
         }
 
         .stat-item {
@@ -84,6 +86,23 @@
             border-left-color: #ff0000;
             background: rgba(255, 0, 0, 0.1);
             animation: pulse 0.5s infinite;
+        }
+
+        #bonusStat {
+            color: #ffff00;
+            border-left-color: #ffff00;
+            background: rgba(255, 255, 0, 0.2);
+            border-left: 3px solid #ffff00;
+            padding: 12px;
+            font-size: 15px;
+            font-weight: bold;
+            animation: bonus-pulse 0.3s infinite;
+            display: none;
+        }
+
+        @keyframes bonus-pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
         }
 
         @keyframes pulse {
@@ -155,13 +174,14 @@
                 <div class="stat-item" id="enemiesStat">👾 Enemies: 5</div>
                 <div class="stat-item" id="weaponStat">🔫 Weapon: Suppressed Rifle</div>
                 <div class="stat-item" id="seedStat">🌱 Seed: 0</div>
+                <div class="stat-item" id="bonusStat">💥 BACK SHOT! +25 BONUS!</div>
 
                 <div style="border-top: 2px solid #00d4ff; padding-top: 15px; color: #00ff00;">
                     <strong>TIP:</strong>
                     <ul style="margin-top: 10px; padding-left: 20px; color: #00d4ff;">
                         <li>Stay hidden!</li>
-                        <li>Use melee for stealth kills</li>
-                        <li>Watch detection meter</li>
+                        <li>Back shots = 2x damage!</li>
+                        <li>Watch for ?/! icons</li>
                         <li>Use cover wisely</li>
                     </ul>
                 </div>
@@ -196,11 +216,15 @@
                 <strong>🎯 OBJECTIVE:</strong> Eliminate all 5 enemies (red squares) without being detected. If your detection level reaches 100%, it's game over!
             </div>
             <div class="features">
-                <strong>✨ NEW FEATURES:</strong>
+                <strong>✨ ADVANCED MECHANICS:</strong>
                 <ul style="margin-top: 8px; padding-left: 20px;">
-                    <li>🌱 Seed-based procedural map generation - different layout each game!</li>
-                    <li>🎯 Aim line preview - see if your shot is blocked by walls</li>
-                    <li>🧱 Wall collision - bullets and AI can't penetrate walls</li>
+                    <li>🤔 <strong>Suspicious State</strong> - Enemies show '?' when suspicious</li>
+                    <li>🚨 <strong>Alert State</strong> - Enemies show '!' when fully alert</li>
+                    <li>📍 <strong>Last Seen Location</strong> - Enemies remember where they saw you</li>
+                    <li>🔔 <strong>Reinforcement System</strong> - After 30s, other enemies go to last seen location (Sniper Elite mechanic)</li>
+                    <li>💥 <strong>Back Shots</strong> - Shoot from behind for 2x damage & bonus points!</li>
+                    <li>🔫 <strong>Wall Collision</strong> - Bullets blocked by walls</li>
+                    <li>🌱 <strong>Procedural Maps</strong> - Different layout every game (seed-based)</li>
                 </ul>
             </div>
         </div>
