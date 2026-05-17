@@ -13,9 +13,12 @@ class SteathMissionGame {
         this.enemies = [];
         this.obstacles = [];
         this.gameState = new GameState();
+        this.rng = new SeededRandom(this.gameState.seed);
 
         // Input handling
         this.keys = {};
+        this.mouseX = 0;
+        this.mouseY = 0;
         this.setupInputHandlers();
 
         // Initialize map
@@ -24,6 +27,9 @@ class SteathMissionGame {
         // Game loop
         this.frameCount = 0;
         this.gameLoop = this.update.bind(this);
+
+        // Display seed
+        console.log('Game Seed:', this.gameState.seed);
     }
 
     setupInputHandlers() {
@@ -40,10 +46,22 @@ class SteathMissionGame {
                 this.weapon = new Weapon(this.player.weapon);
                 this.updateUI();
             }
+            if (e.key === 'r' || e.key === 'R') {
+                this.resetGame();
+            }
         });
 
         document.addEventListener('keyup', (e) => {
             this.keys[e.key] = false;
+        });
+
+        // Mouse move for aim line
+        document.addEventListener('mousemove', (e) => {
+            const rect = this.canvas.getBoundingClientRect();
+            this.mouseX = e.clientX - rect.left;
+            this.mouseY = e.clientY - rect.top;
+            this.player.lastMouseX = this.mouseX;
+            this.player.lastMouseY = this.mouseY;
         });
 
         // Mouse click for shooting
@@ -55,23 +73,89 @@ class SteathMissionGame {
     }
 
     initializeMap() {
-        // Create obstacles (basic shapes)
-        this.obstacles = [
-            new Obstacle(200, 150, 100, 30),
-            new Obstacle(500, 200, 30, 150),
-            new Obstacle(350, 400, 150, 30),
-            new Obstacle(100, 400, 30, 100),
-            new Obstacle(650, 350, 80, 80),
-        ];
+        // Generate random obstacles
+        this.obstacles = [];
+        const numObstacles = 5;
+        const minDistance = 100;
 
-        // Create enemies with patrol points
-        this.enemies = [
-            new Enemy(400, 100, [{ x: 350, y: 100 }, { x: 450, y: 100 }]),
-            new Enemy(550, 250, [{ x: 500, y: 250 }, { x: 600, y: 250 }]),
-            new Enemy(300, 450, [{ x: 250, y: 450 }, { x: 350, y: 450 }]),
-            new Enemy(650, 450, [{ x: 600, y: 450 }, { x: 700, y: 450 }]),
-            new Enemy(150, 200, [{ x: 100, y: 150 }, { x: 200, y: 200 }]),
-        ];
+        for (let i = 0; i < numObstacles; i++) {
+            let x, y, width, height;
+            let validPosition = false;
+
+            while (!validPosition) {
+                x = this.rng.nextInt(100, this.width - 150);
+                y = this.rng.nextInt(100, this.height - 150);
+                width = this.rng.nextInt(50, 150);
+                height = this.rng.nextInt(30, 150);
+
+                // Check if position is valid (not too close to edges or other obstacles)
+                validPosition = true;
+                for (let obstacle of this.obstacles) {
+                    const dist = Math.hypot(x - obstacle.x, y - obstacle.y);
+                    if (dist < minDistance) {
+                        validPosition = false;
+                        break;
+                    }
+                }
+            }
+
+            this.obstacles.push(new Obstacle(x, y, width, height));
+        }
+
+        // Generate random enemies
+        this.enemies = [];
+        const numEnemies = 5;
+
+        for (let i = 0; i < numEnemies; i++) {
+            let enemyX, enemyY;
+            let validEnemyPos = false;
+
+            while (!validEnemyPos) {
+                enemyX = this.rng.nextInt(150, this.width - 150);
+                enemyY = this.rng.nextInt(150, this.height - 150);
+
+                // Check if not colliding with obstacles and away from player
+                validEnemyPos = true;
+                const distToPlayer = Math.hypot(enemyX - this.player.x, enemyY - this.player.y);
+                if (distToPlayer < 150) {
+                    validEnemyPos = false;
+                    continue;
+                }
+
+                for (let obstacle of this.obstacles) {
+                    if (obstacle.checkCollision(enemyX, enemyY, 20)) {
+                        validEnemyPos = false;
+                        break;
+                    }
+                }
+            }
+
+            // Generate random patrol points
+            const patrolX1 = Math.max(50, Math.min(this.width - 50, enemyX + this.rng.nextInt(-100, 100)));
+            const patrolY1 = Math.max(50, Math.min(this.height - 50, enemyY + this.rng.nextInt(-100, 100)));
+            const patrolX2 = Math.max(50, Math.min(this.width - 50, enemyX + this.rng.nextInt(-100, 100)));
+            const patrolY2 = Math.max(50, Math.min(this.height - 50, enemyY + this.rng.nextInt(-100, 100)));
+
+            const patrolPoints = [
+                { x: patrolX1, y: patrolY1 },
+                { x: patrolX2, y: patrolY2 },
+            ];
+
+            this.enemies.push(new Enemy(enemyX, enemyY, patrolPoints));
+        }
+    }
+
+    resetGame() {
+        console.log('Game reset! Old seed:', this.gameState.seed);
+        this.gameState.reset();
+        this.rng = new SeededRandom(this.gameState.seed);
+        this.player = new Player(100, this.height / 2);
+        this.weapon = new Weapon(this.player.weapon);
+        this.enemies = [];
+        this.obstacles = [];
+        this.frameCount = 0;
+        this.initializeMap();
+        console.log('New seed:', this.gameState.seed);
     }
 
     update() {
@@ -84,7 +168,7 @@ class SteathMissionGame {
         this.frameCount++;
 
         // Update player
-        this.player.update(this.keys, this.width, this.height);
+        this.player.update(this.keys, this.width, this.height, this.obstacles);
         this.weapon.update();
 
         // Update enemies
@@ -149,24 +233,35 @@ class SteathMissionGame {
         const distance = Math.hypot(dx, dy);
         const angle = Math.atan2(dy, dx);
 
+        // Check if bullet path is blocked by obstacles
+        let bulletBlocked = false;
+        for (let obstacle of this.obstacles) {
+            if (obstacle.lineIntersects(this.player.x, this.player.y, mouseX, mouseY)) {
+                bulletBlocked = true;
+                break;
+            }
+        }
+
         // Draw bullet
         this.drawBullet(this.player.x, this.player.y, mouseX, mouseY);
 
-        // Check hits on enemies
-        this.enemies.forEach((enemy) => {
-            const edx = enemy.x - this.player.x;
-            const edy = enemy.y - this.player.y;
-            const eDist = Math.hypot(edx, edy);
+        // Check hits on enemies (only if not blocked)
+        if (!bulletBlocked) {
+            this.enemies.forEach((enemy) => {
+                const edx = enemy.x - this.player.x;
+                const edy = enemy.y - this.player.y;
+                const eDist = Math.hypot(edx, edy);
 
-            if (eDist < this.weapon.range) {
-                // Check if bullet hits
-                const dotProduct = (dx * edx + dy * edy) / (distance * eDist);
-                if (dotProduct > 0.95) {
-                    enemy.takeDamage(this.weapon.damage);
-                    this.gameState.score += 10;
+                if (eDist < this.weapon.range) {
+                    // Check if bullet hits
+                    const dotProduct = (dx * edx + dy * edy) / (distance * eDist);
+                    if (dotProduct > 0.95) {
+                        enemy.takeDamage(this.weapon.damage);
+                        this.gameState.score += 10;
+                    }
                 }
-            }
-        });
+            });
+        }
 
         // Suppressed weapon causes detection
         this.player.detectionLevel += this.weapon.detectionLevel;
@@ -197,9 +292,20 @@ class SteathMissionGame {
         const distance = Math.hypot(dx, dy);
 
         if (distance < 200) {
-            // Check hit
-            if (Math.random() > 0.5) {
-                this.player.takeDamage(10);
+            // Check if bullet path is blocked
+            let bulletBlocked = false;
+            for (let obstacle of this.obstacles) {
+                if (obstacle.lineIntersects(enemy.x, enemy.y, this.player.x, this.player.y)) {
+                    bulletBlocked = true;
+                    break;
+                }
+            }
+
+            if (!bulletBlocked) {
+                // Check hit
+                if (Math.random() > 0.5) {
+                    this.player.takeDamage(10);
+                }
             }
         }
     }
@@ -211,6 +317,36 @@ class SteathMissionGame {
         this.ctx.moveTo(fromX, fromY);
         this.ctx.lineTo(toX, toY);
         this.ctx.stroke();
+    }
+
+    drawAimLine() {
+        // Draw line from player to cursor
+        const dx = this.mouseX - this.player.x;
+        const dy = this.mouseY - this.player.y;
+        const distance = Math.hypot(dx, dy);
+
+        if (distance === 0) return;
+
+        // Check if path is blocked by obstacle
+        let isBlocked = false;
+        for (let obstacle of this.obstacles) {
+            if (obstacle.lineIntersects(this.player.x, this.player.y, this.mouseX, this.mouseY)) {
+                isBlocked = true;
+                break;
+            }
+        }
+
+        // Draw aim line with different colors based on whether it's blocked
+        if (this.player.weapon === 'suppressed') {
+            this.ctx.strokeStyle = isBlocked ? 'rgba(255, 100, 100, 0.5)' : 'rgba(0, 255, 100, 0.5)';
+            this.ctx.lineWidth = 2;
+            this.ctx.setLineDash([5, 5]); // Dashed line
+            this.ctx.beginPath();
+            this.ctx.moveTo(this.player.x, this.player.y);
+            this.ctx.lineTo(this.mouseX, this.mouseY);
+            this.ctx.stroke();
+            this.ctx.setLineDash([]); // Reset line dash
+        }
     }
 
     drawMeleeEffect() {
@@ -235,6 +371,9 @@ class SteathMissionGame {
 
         // Draw enemies
         this.enemies.forEach((enemy) => enemy.draw(this.ctx));
+
+        // Draw aim line
+        this.drawAimLine();
 
         // Draw player
         this.player.draw(this.ctx);
@@ -280,6 +419,10 @@ class SteathMissionGame {
         this.ctx.fillStyle = '#ffffff';
         this.ctx.font = '24px Arial';
         this.ctx.fillText(`Final Score: ${this.gameState.score}`, this.width / 2, this.height / 2 + 40);
+
+        this.ctx.fillStyle = '#ffaa00';
+        this.ctx.font = '16px Arial';
+        this.ctx.fillText('Press R to restart', this.width / 2, this.height / 2 + 70);
     }
 
     drawMissionComplete() {
@@ -294,6 +437,10 @@ class SteathMissionGame {
         this.ctx.fillStyle = '#ffffff';
         this.ctx.font = '24px Arial';
         this.ctx.fillText(`Score: ${this.gameState.score}`, this.width / 2, this.height / 2 + 40);
+
+        this.ctx.fillStyle = '#ffaa00';
+        this.ctx.font = '16px Arial';
+        this.ctx.fillText('Press R to restart', this.width / 2, this.height / 2 + 70);
     }
 
     updateUI() {
@@ -320,6 +467,9 @@ class SteathMissionGame {
         // Update weapon
         const weaponName = this.player.weapon === 'suppressed' ? 'Suppressed Rifle' : 'Melee (Knife)';
         document.getElementById('weaponStat').textContent = `🔫 Weapon: ${weaponName}`;
+
+        // Update seed
+        document.getElementById('seedStat').textContent = `🌱 Seed: ${this.gameState.seed}`;
     }
 
     start() {

@@ -1,5 +1,25 @@
 // ==================== GAME API / MODELS ====================
 
+// ==================== SEEDED RANDOM NUMBER GENERATOR ====================
+class SeededRandom {
+    constructor(seed) {
+        this.seed = seed;
+    }
+
+    next() {
+        this.seed = (this.seed * 9301 + 49297) % 233280;
+        return this.seed / 233280;
+    }
+
+    nextInt(min, max) {
+        return Math.floor(this.next() * (max - min + 1)) + min;
+    }
+
+    nextFloat(min, max) {
+        return this.next() * (max - min) + min;
+    }
+}
+
 // ==================== PLAYER MODEL ====================
 class Player {
     constructor(x, y) {
@@ -15,9 +35,11 @@ class Player {
         this.meleeDamage = 50;
         this.meleeAttackCooldown = 0;
         this.baseDetectionReduction = 0.5; // Stealth reduction per frame when still
+        this.lastMouseX = 0;
+        this.lastMouseY = 0;
     }
 
-    update(keys, canvasWidth, canvasHeight) {
+    update(keys, canvasWidth, canvasHeight, obstacles) {
         const oldX = this.x;
         const oldY = this.y;
 
@@ -30,6 +52,15 @@ class Player {
         // Boundary check
         this.x = Math.max(10, Math.min(canvasWidth - 10, this.x));
         this.y = Math.max(10, Math.min(canvasHeight - 10, this.y));
+
+        // Collision with obstacles
+        for (let obstacle of obstacles) {
+            if (obstacle.checkCollision(this.x, this.y, this.width / 2)) {
+                this.x = oldX;
+                this.y = oldY;
+                break;
+            }
+        }
 
         // If moving, increase detection; if still, decrease it
         if (this.x !== oldX || this.y !== oldY) {
@@ -111,6 +142,9 @@ class Enemy {
     update(player, obstacles) {
         if (!this.isAlive()) return;
 
+        const oldX = this.x;
+        const oldY = this.y;
+
         // Calculate distance to player
         const dx = player.x - this.x;
         const dy = player.y - this.y;
@@ -125,6 +159,15 @@ class Enemy {
         } else {
             this.alertLevel = Math.max(0, this.alertLevel - 1);
             this.patrol();
+        }
+
+        // Collision with obstacles
+        for (let obstacle of obstacles) {
+            if (obstacle.checkCollision(this.x, this.y, this.width / 2)) {
+                this.x = oldX;
+                this.y = oldY;
+                break;
+            }
         }
 
         this.shootCooldown = Math.max(0, this.shootCooldown - 1);
@@ -270,6 +313,27 @@ class Obstacle {
         );
     }
 
+    // Line-to-rectangle intersection (for bullet collision)
+    lineIntersects(x1, y1, x2, y2) {
+        // Check if line from (x1,y1) to (x2,y2) intersects this rectangle
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const length = Math.hypot(dx, dy);
+        
+        if (length === 0) return false;
+
+        for (let t = 0; t <= 1; t += 0.1) {
+            const px = x1 + dx * t;
+            const py = y1 + dy * t;
+            
+            if (px > this.x && px < this.x + this.width &&
+                py > this.y && py < this.y + this.height) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     draw(ctx) {
         ctx.fillStyle = '#666666';
         ctx.fillRect(this.x, this.y, this.width, this.height);
@@ -290,6 +354,7 @@ class GameState {
         this.score = 0;
         this.level = 1;
         this.totalEnemiesEliminated = 0;
+        this.seed = Math.floor(Math.random() * 1000000);
     }
 
     reset() {
@@ -297,6 +362,7 @@ class GameState {
         this.gameOver = false;
         this.missionComplete = false;
         this.score = 0;
+        this.seed = Math.floor(Math.random() * 1000000); // New seed for next game
     }
 
     addScore(points) {
