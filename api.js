@@ -142,13 +142,15 @@ class Enemy {
         this.suspiciousTime = 0; // Time spent suspicious
         this.patrolPoints = patrolPoints.length > 0 ? patrolPoints : [{ x, y }];
         this.currentPatrolIndex = 0;
-        this.speed = 1.5;
+        this.speed = 0.8; // Reduced from 1.5 to 0.8
         this.shootCooldown = 0;
         this.visionAngle = Math.PI * 0.8; // 144 degrees
+        this.facingAngle = 0; // Direction enemy is facing
         this.lastSeenPlayerPos = null; // Last known player position
         this.lastSeenPlayerTime = 0; // When player was last seen
         this.reinforcementWaitTime = 0; // Time until this enemy goes to last seen location
         this.movingToLastSeen = false; // Currently moving to last seen location
+        this.corpseDecayTime = 0; // For drawing this corpse
     }
 
     update(player, obstacles, allEnemies, frameCount) {
@@ -162,7 +164,24 @@ class Enemy {
         const dy = player.y - this.y;
         const distance = Math.hypot(dx, dy);
 
-        // Check if player is in detection range
+        // Update facing angle based on movement direction
+        if (this.movingToLastSeen && this.lastSeenPlayerPos) {
+            const tdx = this.lastSeenPlayerPos.x - this.x;
+            const tdy = this.lastSeenPlayerPos.y - this.y;
+            this.facingAngle = Math.atan2(tdy, tdx);
+        } else if (this.alertLevel > 50) {
+            this.facingAngle = Math.atan2(dy, dx);
+        } else if (this.patrolPoints.length > 0) {
+            const targetPoint = this.patrolPoints[this.currentPatrolIndex];
+            const pdx = targetPoint.x - this.x;
+            const pdy = targetPoint.y - this.y;
+            const pdist = Math.hypot(pdx, pdy);
+            if (pdist > 0) {
+                this.facingAngle = Math.atan2(pdy, pdx);
+            }
+        }
+
+        // Check if player is in vision cone
         const playerDetected = this.canSeePlayer(player);
         const playerSuspicious = this.canSuspectPlayer(player);
 
@@ -219,6 +238,9 @@ class Enemy {
             }
         }
 
+        // Check for nearby corpses and become alert
+        this.checkForCorpses(allEnemies);
+
         this.shootCooldown = Math.max(0, this.shootCooldown - 1);
     }
 
@@ -228,7 +250,18 @@ class Enemy {
         const distance = Math.hypot(dx, dy);
 
         if (distance > this.detectionRange) return false;
-        return true;
+
+        // Check if player is in front of enemy (vision cone)
+        const angleToPlayer = Math.atan2(dy, dx);
+        let angleDiff = angleToPlayer - this.facingAngle;
+        
+        // Normalize angle difference to [-PI, PI]
+        while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+        while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+
+        // Check if within vision cone (120 degrees = PI * 2/3)
+        const visionHalfAngle = Math.PI / 3; // 60 degrees on each side
+        return Math.abs(angleDiff) < visionHalfAngle;
     }
 
     canSuspectPlayer(player) {
@@ -237,8 +270,25 @@ class Enemy {
         const distance = Math.hypot(dx, dy);
 
         if (distance > this.suspicionRange) return false;
-        // More likely to suspect if player is moving
         return true;
+    }
+
+    checkForCorpses(allEnemies) {
+        // Check nearby enemies for corpses
+        allEnemies.forEach((other) => {
+            if (other !== this && !other.isAlive() && other.corpseDecayTime > 0) {
+                const dx = other.x - this.x;
+                const dy = other.y - this.y;
+                const distance = Math.hypot(dx, dy);
+
+                // If corpse is nearby and recently died, become alert
+                if (distance < 150) {
+                    this.alertLevel = Math.min(100, this.alertLevel + 3);
+                    this.lastSeenPlayerPos = { x: other.x, y: other.y }; // Investigate corpse location
+                    this.lastSeenPlayerTime = Date.now();
+                }
+            }
+        });
     }
 
     chasePlayer(player) {
@@ -307,6 +357,43 @@ class Enemy {
         ctx.fillStyle = color;
         ctx.fillRect(this.x - this.width / 2, this.y - this.height / 2, this.width, this.height);
 
+        // Draw facing direction indicator
+        const arrowLength = 12;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(this.x, this.y);
+        ctx.lineTo(
+            this.x + Math.cos(this.facingAngle) * arrowLength,
+            this.y + Math.sin(this.facingAngle) * arrowLength
+        );
+        ctx.stroke();
+
+        // Draw vision cone when alert
+        if (this.alertLevel > 30) {
+            const visionHalfAngle = Math.PI / 3; // 60 degrees
+            const visionRange = this.detectionRange;
+            ctx.strokeStyle = `rgba(255, 100, 100, ${this.alertLevel / 100 * 0.4})`;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, visionRange, this.facingAngle - visionHalfAngle, this.facingAngle + visionHalfAngle);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(this.x, this.y);
+            ctx.lineTo(
+                this.x + Math.cos(this.facingAngle - visionHalfAngle) * visionRange,
+                this.y + Math.sin(this.facingAngle - visionHalfAngle) * visionRange
+            );
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(this.x, this.y);
+            ctx.lineTo(
+                this.x + Math.cos(this.facingAngle + visionHalfAngle) * visionRange,
+                this.y + Math.sin(this.facingAngle + visionHalfAngle) * visionRange
+            );
+            ctx.stroke();
+        }
+
         // Draw health bar
         const barWidth = 20;
         const barHeight = 3;
@@ -331,15 +418,6 @@ class Enemy {
             ctx.fillText('!', this.x, this.y - 25);
         }
 
-        // Draw detection range when alerted
-        if (this.alertLevel > 50) {
-            ctx.strokeStyle = `rgba(255, 0, 0, ${this.alertLevel / 100 * 0.3})`;
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, this.detectionRange, 0, Math.PI * 2);
-            ctx.stroke();
-        }
-
         // Draw moving to last seen indicator
         if (this.movingToLastSeen && this.lastSeenPlayerPos) {
             ctx.strokeStyle = 'rgba(255, 100, 100, 0.5)';
@@ -351,6 +429,44 @@ class Enemy {
             ctx.stroke();
             ctx.setLineDash([]);
         }
+    }
+}
+
+// ==================== CORPSE MODEL ====================
+class Corpse {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.width = 20;
+        this.height = 20;
+        this.decayTime = 300; // Frames until corpse disappears (5 seconds at 60fps)
+        this.maxDecayTime = 300;
+    }
+
+    update() {
+        this.decayTime--;
+    }
+
+    isDecayed() {
+        return this.decayTime <= 0;
+    }
+
+    draw(ctx) {
+        const alpha = this.decayTime / this.maxDecayTime;
+        ctx.fillStyle = `rgba(139, 69, 19, ${alpha * 0.8})`; // Brown with fading alpha
+        ctx.fillRect(this.x - this.width / 2, this.y - this.height / 2, this.width, this.height);
+
+        // Draw X pattern on corpse
+        ctx.strokeStyle = `rgba(100, 40, 10, ${alpha})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(this.x - this.width / 2, this.y - this.height / 2);
+        ctx.lineTo(this.x + this.width / 2, this.y + this.height / 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(this.x + this.width / 2, this.y - this.height / 2);
+        ctx.lineTo(this.x - this.width / 2, this.y + this.height / 2);
+        ctx.stroke();
     }
 }
 

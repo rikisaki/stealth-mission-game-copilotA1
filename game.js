@@ -11,6 +11,7 @@ class SteathMissionGame {
         this.player = new Player(100, this.height / 2);
         this.weapon = new Weapon(this.player.weapon);
         this.enemies = [];
+        this.corpses = [];
         this.obstacles = [];
         this.gameState = new GameState();
         this.rng = new SeededRandom(this.gameState.seed);
@@ -152,6 +153,7 @@ class SteathMissionGame {
         this.player = new Player(100, this.height / 2);
         this.weapon = new Weapon(this.player.weapon);
         this.enemies = [];
+        this.corpses = [];
         this.obstacles = [];
         this.frameCount = 0;
         this.initializeMap();
@@ -170,6 +172,10 @@ class SteathMissionGame {
         // Update player
         this.player.update(this.keys, this.width, this.height, this.obstacles);
         this.weapon.update();
+
+        // Update corpses
+        this.corpses.forEach((corpse) => corpse.update());
+        this.corpses = this.corpses.filter((corpse) => !corpse.isDecayed());
 
         // Update enemies
         this.enemies.forEach((enemy) => {
@@ -198,7 +204,12 @@ class SteathMissionGame {
             }
         });
 
-        // Remove dead enemies
+        // Remove dead enemies and create corpses
+        const deadEnemies = this.enemies.filter((enemy) => !enemy.isAlive());
+        deadEnemies.forEach((enemy) => {
+            const corpse = new Corpse(enemy.x, enemy.y);
+            this.corpses.push(corpse);
+        });
         this.enemies = this.enemies.filter((enemy) => enemy.isAlive());
 
         // Check win condition
@@ -219,31 +230,6 @@ class SteathMissionGame {
         this.draw();
 
         requestAnimationFrame(this.gameLoop);
-    }
-
-    isBackShot(enemy) {
-        // Calculate enemy facing direction
-        const dx = this.player.x - enemy.x;
-        const dy = this.player.y - enemy.y;
-        const angleToPlayer = Math.atan2(dy, dx);
-
-        // Enemy facing is based on where it's moving (patrol or chase direction)
-        // For simplicity, assume enemy faces direction of movement
-        let enemyFacing = Math.atan2(enemy.speed, 0); // Default
-        if (enemy.movingToLastSeen && enemy.lastSeenPlayerPos) {
-            const edx = enemy.lastSeenPlayerPos.x - enemy.x;
-            const edy = enemy.lastSeenPlayerPos.y - enemy.y;
-            enemyFacing = Math.atan2(edy, edx);
-        } else if (enemy.alertLevel > 50) {
-            enemyFacing = angleToPlayer;
-        }
-
-        // Check if angle difference is > 90 degrees (back shot)
-        let angleDiff = Math.abs(enemyFacing - angleToPlayer);
-        // Normalize angle difference
-        while (angleDiff > Math.PI) angleDiff = Math.abs(angleDiff - Math.PI * 2);
-        
-        return angleDiff > Math.PI / 2; // 90 degrees
     }
 
     playerShoot(event) {
@@ -270,28 +256,44 @@ class SteathMissionGame {
         // Draw bullet
         this.drawBullet(this.player.x, this.player.y, mouseX, mouseY);
 
-        // Check hits on enemies (only if not blocked)
-        if (!bulletBlocked) {
-            this.enemies.forEach((enemy) => {
-                const edx = enemy.x - this.player.x;
-                const edy = enemy.y - this.player.y;
-                const eDist = Math.hypot(edx, edy);
+        // Get all enemies in line and sort by distance
+        const enemiesInLine = [];
+        this.enemies.forEach((enemy) => {
+            const edx = enemy.x - this.player.x;
+            const edy = enemy.y - this.player.y;
+            const eDist = Math.hypot(edx, edy);
 
-                if (eDist < this.weapon.range) {
-                    // Check if bullet hits
-                    const dotProduct = (dx * edx + dy * edy) / (distance * eDist);
-                    if (dotProduct > 0.95) {
-                        // Check if it's a back shot
-                        const isBackShot = this.isBackShot(enemy);
-                        enemy.takeDamage(this.weapon.damage, isBackShot);
-                        
-                        if (isBackShot) {
-                            this.gameState.score += 25; // Bonus for back shot
-                            this.gameState.backShotBonus = 30; // Display bonus for 30 frames
-                        } else {
-                            this.gameState.score += 10;
-                        }
-                    }
+            if (eDist < this.weapon.range) {
+                // Check if enemy is in line of fire
+                const dotProduct = (dx * edx + dy * edy) / (distance * eDist);
+                if (dotProduct > 0.95) { // Nearly aligned
+                    enemiesInLine.push({
+                        enemy: enemy,
+                        distance: eDist
+                    });
+                }
+            }
+        });
+
+        // Sort by distance (closest first)
+        enemiesInLine.sort((a, b) => a.distance - b.distance);
+
+        // Apply damage with penetration
+        if (!bulletBlocked && enemiesInLine.length > 0) {
+            enemiesInLine.forEach((item, index) => {
+                let damageMultiplier = 1; // First enemy takes full damage
+                if (index > 0) {
+                    // Each subsequent enemy takes 25% of original damage
+                    damageMultiplier = 0.25 * Math.pow(0.25, index - 1);
+                }
+
+                const damage = Math.ceil(this.weapon.damage * damageMultiplier);
+                item.enemy.takeDamage(damage, false);
+
+                if (index === 0) {
+                    this.gameState.score += 10; // Full points for first kill
+                } else {
+                    this.gameState.score += Math.max(1, Math.floor(10 * damageMultiplier));
                 }
             });
         }
@@ -303,27 +305,49 @@ class SteathMissionGame {
     playerMeleeAttack() {
         if (!this.player.attack()) return;
 
-        // Check enemies in melee range
+        // Find closest enemy in melee range
+        let closestEnemy = null;
+        let closestDist = this.player.meleeRange;
+
         this.enemies.forEach((enemy) => {
             const dx = enemy.x - this.player.x;
             const dy = enemy.y - this.player.y;
             const distance = Math.hypot(dx, dy);
 
-            if (distance < this.player.meleeRange) {
-                const isBackStab = this.isBackShot(enemy);
-                enemy.takeDamage(this.player.meleeDamage, isBackStab);
-                
-                if (isBackStab) {
-                    this.gameState.score += 50; // Bonus for back stab
-                    this.gameState.backShotBonus = 30;
-                } else {
-                    this.gameState.score += 25;
-                }
+            if (distance < closestDist) {
+                closestDist = distance;
+                closestEnemy = enemy;
             }
         });
 
+        if (closestEnemy) {
+            const isBackStab = this.isBackShot(closestEnemy);
+            closestEnemy.takeDamage(this.player.meleeDamage, isBackStab);
+            
+            if (isBackStab) {
+                this.gameState.score += 50; // Bonus for back stab
+                this.gameState.backShotBonus = 30;
+            } else {
+                this.gameState.score += 25;
+            }
+        }
+
         // Draw melee attack effect
         this.drawMeleeEffect();
+    }
+
+    isBackShot(enemy) {
+        // Calculate enemy facing direction
+        const dx = this.player.x - enemy.x;
+        const dy = this.player.y - enemy.y;
+        const angleToPlayer = Math.atan2(dy, dx);
+
+        // Check if angle difference is > 90 degrees (back shot)
+        let angleDiff = Math.abs(enemy.facingAngle - angleToPlayer);
+        // Normalize angle difference
+        while (angleDiff > Math.PI) angleDiff = Math.abs(angleDiff - Math.PI * 2);
+        
+        return angleDiff > Math.PI / 2; // 90 degrees
     }
 
     enemyShoot(enemy) {
@@ -408,6 +432,9 @@ class SteathMissionGame {
 
         // Draw obstacles
         this.obstacles.forEach((obstacle) => obstacle.draw(this.ctx));
+
+        // Draw corpses
+        this.corpses.forEach((corpse) => corpse.draw(this.ctx));
 
         // Draw last seen locations
         this.enemies.forEach((enemy) => {
